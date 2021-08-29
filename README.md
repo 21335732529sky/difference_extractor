@@ -13,7 +13,7 @@ python3 train.py --data huffpost --data_dir data/ --config_files config.yaml --l
 python3 train.py --data huffpost --data_dir data/ --config_files config.yaml --search_params
 
 # For evaluating
-python3 train.py --data huffpost --data_dir data/ --config_file config.yaml --eval_model_path /path/to/model 
+python3 train.py --data huffpost --data_dir data/ --config_file config.yaml --eval_model_path /path/to/model --test_N 5 --test_K 1
 ```
 
 ###  Config.yaml
