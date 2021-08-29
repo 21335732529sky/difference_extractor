@@ -102,8 +102,8 @@ class ProtoNet(torch.nn.Module):
     def __init__(self,
                  bert_type='bert-base-uncased',
                  metric='distance',
-                 alpha=1e-2,
-                 gamma=1e-6,
+                 gamma=1e-2,
+                 alpha=1e-6,
                  diff_extractor=False,
                  maml=False):
         super(ProtoNet, self).__init__()
@@ -125,7 +125,7 @@ class ProtoNet(torch.nn.Module):
         self.bce_loss = torch.nn.BCELoss(reduction='none')
         self.nll = torch.nn.NLLLoss()
         self.relu = torch.nn.ReLU()
-        self.gamma = gamma
+        self.alpha = alpha
         self.count = 0
         self.maml = False
 
@@ -145,10 +145,10 @@ class ProtoNet(torch.nn.Module):
 
         self.cnn = None
 
-        self.ss_rel = diff_extractor
+        self.extract_diff = diff_extractor
         self.metric = metric
         self.sw = False
-        self.alpha = alpha
+        self.gamma = gamma
         self.scaler_inner = GradScaler()
 
         self.W_key = torch.nn.Linear(768, 768)
@@ -181,12 +181,12 @@ class ProtoNet(torch.nn.Module):
             for p, g in zip(params, self.stored_grads):
                 if g is None:
                     continue
-                p.add_(g, alpha=self.alpha)
+                p.add_(g, gamma=self.gamma)
             if hasattr(self, 'fnn'):
                 for p, g in zip(self.fnn.parameters(), self.stored_grads_ss):
                     if g is None:
                         continue
-                    p.add_(g, alpha=self.alpha)
+                    p.add_(g, gamma=self.gamma)
 
     def forward(self, support_set, query_set, label, additional):
         kwargs = preprocess(support_set, query_set, label, additional, self.tokenizer)
@@ -221,12 +221,12 @@ class ProtoNet(torch.nn.Module):
             self.stored_grads = grads
             with torch.no_grad():
                 for p, g in zip(params, grads):
-                    p.add_(g, alpha=-self.alpha)
+                    p.add_(g, gamma=-self.gamma)
             local_query_rep, _ = self.bert(input_ids=query_set, attention_mask=query_mask)
             query_rep = local_query_rep[:, 0, :]
             support_rep = self.meta_w
 
-        if self.ss_rel:
+        if self.extract_diff:
             support_rep_ex = support_rep.unsqueeze(0).expand((query_rep.shape[0], -1, -1))
             query_rep_ex = query_rep.unsqueeze(1)
             concated = torch.cat([support_rep_ex, query_rep_ex], dim=1)
@@ -237,7 +237,7 @@ class ProtoNet(torch.nn.Module):
                 sampled_maml = self.fnn(concated_maml.detach(), n_samples=1)
                 sampled_s_maml = sampled_maml[:, :N, :]
                 sampled_q_maml = sampled_maml[:, N, :]
-                if abs(self.gamma) > 1e-10:
+                if abs(self.alpha) > 1e-10:
                     self.mi_upper_bound(sampled_s_maml.unsqueeze(0), sampled_s_maml.unsqueeze(0), backprop_only=True,
                                         den=1)
                     self.step_inner()
@@ -248,13 +248,13 @@ class ProtoNet(torch.nn.Module):
                 idx_ = torch.cuda.LongTensor(list(range(N * K)))
                 logits = logits[idx_, :, idx_] / (768 ** 0.5) + self.meta_b
                 loss_maml_ss = self.nll(self.ls(logits), maml_label)
-                loss_maml_ss = loss_maml_ss + self.gamma * kl_ss
+                loss_maml_ss = loss_maml_ss + self.alpha * kl_ss
                 grads_ss = torch.autograd.grad(loss_maml_ss, self.fnn.parameters(), create_graph=True,
                                                allow_unused=True)
                 self.stored_grads_ss = grads_ss
                 with torch.no_grad():
                     for (name, p), g in zip(self.fnn.named_parameters(), grads_ss):
-                        p.add_(g, alpha=-self.alpha)
+                        p.add_(g, gamma=-self.gamma)
 
             sampled_all_ng = self.fnn(concated.detach(), n_samples=16)
             sampled_s_ng = sampled_all_ng[:, :support_rep.shape[0], :]
@@ -263,7 +263,7 @@ class ProtoNet(torch.nn.Module):
             sampled_s = sampled_all[:, :support_rep.shape[0], :]
             sampled_q = sampled_all[:, support_rep.shape[0], :]
 
-            if abs(self.gamma) > 1e-10:
+            if abs(self.alpha) > 1e-10:
                 self.mi_upper_bound(sampled_s_ng.unsqueeze(0), sampled_s_ng.unsqueeze(0), backprop_only=True, den=1)
                 self.step_inner()
                 kl_ss = self.mi_upper_bound(sampled_s_ng.unsqueeze(0), sampled_s_ng.unsqueeze(0))
@@ -279,13 +279,13 @@ class ProtoNet(torch.nn.Module):
             query_rep = query_rep.unsqueeze(1)
 
         if self.maml:
-            if not self.ss_rel:
+            if not self.extract_diff:
                 support_rep = support_rep.squeeze()
                 query_rep = query_rep.squeeze()
             else:
                 query_rep = query_rep[:, 0, :]
             logits = torch.matmul(support_rep, query_rep.transpose(-2, -1))
-            if self.ss_rel:
+            if self.extract_diff:
                 idx_ = torch.cuda.LongTensor(list(range(Q)))
                 logits = logits[idx_, :, idx_] / (768 ** 0.5) + self.meta_b
             else:
@@ -301,8 +301,8 @@ class ProtoNet(torch.nn.Module):
         loss = self.nll(self.ls(logits), labels).mean()
         self.writer.add_scalar('Loss/main', loss.detach().cpu().numpy(), self.count)
         self.count += 1
-        if self.ss_rel:
-            loss += self.gamma * (kl_ss - lower_b)
+        if self.extract_diff:
+            loss += self.alpha * (kl_ss - lower_b)
 
         return loss
 
@@ -404,11 +404,11 @@ class ProtoNet(torch.nn.Module):
                 for p, g in zip(params, grads):
                     if g is None:
                         continue
-                    p.add_(g, alpha=-self.alpha)
+                    p.add_(g, gamma=-self.gamma)
                 local_query_rep, _ = self.bert(input_ids=query_set, attention_mask=query_mask)
                 query_rep = local_query_rep[:, 0, :]
                 support_rep = self.meta_w
-            if self.ss_rel:
+            if self.extract_diff:
                 support_rep_ex = support_rep.unsqueeze(0).expand((query_rep.shape[0], -1, -1))
                 query_rep_ex = query_rep.unsqueeze(1)
                 concated = torch.cat([support_rep_ex, query_rep_ex], dim=1)
@@ -420,7 +420,7 @@ class ProtoNet(torch.nn.Module):
                         sampled_maml = self.fnn(concated_maml.detach(), n_samples=1)
                         sampled_s_maml = sampled_maml[:, :N, :]
                         sampled_q_maml = sampled_maml[:, N, :]
-                        if abs(self.gamma) > 1e-10:
+                        if abs(self.alpha) > 1e-10:
                             kl_ss = self.mi_upper_bound(sampled_s_maml.unsqueeze(0), sampled_s_maml.unsqueeze(0))
                         else:
                             kl_ss = 0
@@ -428,7 +428,7 @@ class ProtoNet(torch.nn.Module):
                         idx_ = torch.cuda.LongTensor(list(range(N * K)))
                         logits = logits[idx_, :, idx_] / (768 ** 0.5) + self.meta_b
                         loss_maml_ss = self.nll(self.ls(logits), maml_label)
-                        loss_maml_ss = loss_maml_ss + self.gamma * kl_ss
+                        loss_maml_ss = loss_maml_ss + self.alpha * kl_ss
                     grads_ss = torch.autograd.grad(loss_maml_ss, self.fnn.parameters(), create_graph=True,
                                                    allow_unused=True)
                     self.stored_grads_ss = grads_ss
@@ -436,7 +436,7 @@ class ProtoNet(torch.nn.Module):
                         for p, g in zip(self.fnn.parameters(), grads_ss):
                             if g is None:
                                 continue
-                            p.add_(g, alpha=-self.alpha)
+                            p.add_(g, gamma=-self.gamma)
                 if concated.shape[0] < 8:
                     Q = concated.shape[0]
                     concated = concated.repeat(2, 1, 1)
@@ -454,13 +454,13 @@ class ProtoNet(torch.nn.Module):
                 query_rep = query_rep.unsqueeze(1)
 
             if self.maml:
-                if not self.ss_rel:
+                if not self.extract_diff:
                     support_rep = support_rep.squeeze()
                     query_rep = query_rep.squeeze()
                 else:
                     query_rep = query_rep[:, 0, :]
                 logits = torch.matmul(support_rep, query_rep.transpose(-2, -1))
-                if self.ss_rel:
+                if self.extract_diff:
                     idx_ = torch.cuda.LongTensor(list(range(Q)))
                     logits = logits[idx_, :, idx_] / (768 ** 0.5) + self.meta_b
                 else:
@@ -476,11 +476,11 @@ class MLMAN(torch.nn.Module):
     def __init__(self,
                  encoder='bert-base-uncased',
                  hidden_dim=100,
-                 gamma=0,
+                 alpha=0,
                  lambda_=0.5,
                  rerank=False,
                  ns=False,
-                 ss_rel=False,
+                 extract_diff=False,
                  add_null=False):
         super(MLMAN, self).__init__()
         self.bert_encoder = AutoModel.from_pretrained(encoder)
@@ -498,12 +498,12 @@ class MLMAN(torch.nn.Module):
 
 
         self.emb_dim = (self.cnn.ebd_dim if self.cnn else 768)
-        self.ss_rel = ss_rel
+        self.extract_diff = extract_diff
 
         self.lstm = torch.nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim, bidirectional=True, batch_first=True)
         self.linear1 = torch.nn.Linear((200 if encoder == 'lstm' else self.emb_dim) * 4, hidden_dim)
         self.linear2 = torch.nn.Linear(hidden_dim * 8, hidden_dim)
-        if ss_rel:
+        if extract_diff:
             self.fnn = DifferenceExtractor(hidden_dim * 4, hidden_dim * 4)
             self.fnn = torch.nn.DataParallel(self.fnn)
             self.p_theta = CompressedDist(768, 768)
@@ -523,7 +523,7 @@ class MLMAN(torch.nn.Module):
         self.add_null = add_null
 
         self.lambda_ = lambda_
-        self.gamma = gamma
+        self.alpha = alpha
 
     def set_inner_opt(self, lr=1e-5, num_steps=1):
         par = list(self.p_phi.parameters())
@@ -669,7 +669,7 @@ class MLMAN(torch.nn.Module):
                                                                 support_lengths=support_lengths,
                                                                 instance_mask=instance_mask)
         class_proto = self.instance_maching_aggregation(support_rep, query_rep)
-        if self.ss_rel:
+        if self.extract_diff:
             concated = torch.cat([class_proto, query_rep], dim=1)
 
             sampled_all_ng = self.fnn(concated.detach(), n_samples=16)
@@ -679,7 +679,7 @@ class MLMAN(torch.nn.Module):
             class_proto_ss = sampled_all[:, :N, :]
             query_rep = sampled_all[:, N:, :]
 
-            if abs(self.gamma) > 1e-10:
+            if abs(self.alpha) > 1e-10:
                 self.mi_upper_bound(sampled_s_ng.unsqueeze(0), sampled_s_ng.unsqueeze(0), backprop_only=True, den=1)
                 self.step_inner()
                 kl_ss = self.mi_upper_bound(sampled_s_ng.unsqueeze(0), sampled_s_ng.unsqueeze(0))
@@ -691,7 +691,7 @@ class MLMAN(torch.nn.Module):
         all_maching_scores = self.class_maching(class_proto_ss, query_rep)
 
         all_loss = self.nll(self.ls(all_maching_scores), support_label) + self.lambda_ * incon_loss
-        all_loss += self.gamma * kl_ss
+        all_loss += self.alpha * kl_ss
 
         return all_loss
 
@@ -746,7 +746,7 @@ class MLMAN(torch.nn.Module):
                                                                 support_lengths=support_lengths,
                                                                 instance_mask=instance_mask)
         class_proto = self.instance_maching_aggregation(support_rep, query_rep)
-        if self.ss_rel:
+        if self.extract_diff:
             concated = torch.cat([class_proto, query_rep], dim=1)
 
             sampled_all = self.fnn(concated, n_samples=16)

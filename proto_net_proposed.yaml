@@ -1,0 +1,9 @@
+model: "proto"
+num_train_steps: 50000
+num_eval_steps: 1000
+early_stop: 20
+eval_interval: 100
+meta_setting:
+  K: 1
+  N: 5
+  Q: 25

@@ -232,29 +232,19 @@ class HuffpostDataset_ICLR(FewshotDataset):
         return {'support_labels': [self.labels[i[0]] for i in idxs],
                 'query_labels': [self.labels[i] for i in idxq]}
 
-    def split_labels(self, task_type, label_split):
-        if task_type == 'all':
-            min_samples = self.setting.K + 1 if self.setting is not None else 3
-            self.train_labels = [l for l in self.all_labels if len(self.groups[l]) > min_samples]
-            self.dev_labels = list(self.all_labels)
-            self.test_labels = list(self.all_labels)
-        elif task_type == 'disjoint':
-            self.train_labels = list(range(0, 20))
-            self.dev_labels = list(range(20, 25))
-            self.test_labels = list(range(25, 41))
+    def split_labels(self, label_split):
+        self.train_labels = list(range(0, 20))
+        self.dev_labels = list(range(20, 25))
+        self.test_labels = list(range(25, 41))
 
 
 class FewRelDataset_ICLR(FewshotDataset):
     def __init__(self,
                  data_dir,
-                 task_type='disjoint',
-                 data_size='all',
                  label_split=None,
                  use_loc_info=False):
         super(FewRelDataset_ICLR, self).__init__(
             data_dir,
-            task_type=task_type,
-            data_size=data_size,
             label_split=label_split)
         self.use_loc_info = use_loc_info
 
@@ -314,59 +304,25 @@ class FewRelDataset_ICLR(FewshotDataset):
 
         return ret
 
-    def split_labels(self, task_type, label_split):
-        if task_type == 'all':
-            min_samples = self.setting.K + 1 if self.setting is not None else 3
-            self.train_labels = [l for l in self.all_labels if len(self.groups[l]) > min_samples]
-            self.dev_labels = list(self.all_labels)
-            self.test_labels = list(self.all_labels)
-        elif task_type == 'disjoint':
-            self.train_labels = [0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15, 16, 19, 21,
-                                 22, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 37, 38,
-                                 39, 40, 41, 43, 44, 45, 46, 48, 49, 50, 52, 53, 56, 57, 58,
-                                 59, 61, 62, 63, 64, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
-                                 76, 77, 78]
-            self.dev_labels = [7, 9, 17, 18, 20]
-            self.test_labels = [23, 29, 42, 47, 51, 54, 55, 60, 65, 79]
+    def split_labels(self, label_split):
+        self.train_labels = [0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15, 16, 19, 21,
+                             22, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                             39, 40, 41, 43, 44, 45, 46, 48, 49, 50, 52, 53, 56, 57, 58,
+                             59, 61, 62, 63, 64, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
+                             76, 77, 78]
+        self.dev_labels = [7, 9, 17, 18, 20]
+        self.test_labels = [23, 29, 42, 47, 51, 54, 55, 60, 65, 79]
 
 
 class FewRelDataset(FewRelDataset_ICLR):
-    def split_labels(self, task_type, label_split):
-        if task_type == 'all':
-            min_samples = self.setting.K + 1 if self.setting is not None else 3
-            self.train_labels = [l for l in self.all_labels if len(self.groups[l]) > min_samples]
-            self.dev_labels = list(self.all_labels)
-            self.test_labels = list(self.all_labels)
-        elif task_type == 'disjoint':
-            all_labels = list(self.groups.keys())
-            self.train_labels, self.test_labels = train_test_split(all_labels,
-                                                                   random_state=42,
-                                                                   shuffle=True,
-                                                                   test_size=.4)
-            self.dev_labels, self.test_labels = train_test_split(self.test_labels,
-                                                                 random_state=42,
-                                                                 shuffle=True,
-                                                                 test_size=.5)
+    def split_labels(self, label_split):
+        all_labels = list(self.groups.keys())
+        self.train_labels, self.test_labels = train_test_split(all_labels,
+                                                               random_state=42,
+                                                               shuffle=True,
+                                                               test_size=.4)
+        self.dev_labels, self.test_labels = train_test_split(self.test_labels,
+                                                             random_state=42,
+                                                             shuffle=True,
+                                                             test_size=.5)
 
-
-class HuffpostDatset(HuffpostDataset_ICLR):
-    def split_labels(self, task_type, label_split):
-        if task_type == 'all':
-            min_samples = self.setting.K + 1 if self.setting is not None else 3
-            self.train_labels = [l for l in self.all_labels if len(self.groups[l]) > min_samples]
-            self.dev_labels = list(self.all_labels)
-            self.test_labels = list(self.all_labels)
-        elif task_type == 'disjoint':
-            all_labels = list(self.groups.keys())
-            self.train_labels, self.test_labels = train_test_split(all_labels,
-                                                                   random_state=42,
-                                                                   shuffle=True,
-                                                                   test_size=.4)
-            self.dev_labels, self.test_labels = train_test_split(self.test_labels,
-                                                                 random_state=42,
-                                                                 shuffle=True,
-                                                                 test_size=.5)
-
-
-if __name__ == '__main__':
-    a = FewRelDataset_ICLR('data')
